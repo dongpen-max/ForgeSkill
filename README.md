@@ -1,4 +1,6 @@
-# GitHub Skill Synthesizer
+# ForgeSkill
+
+Synthesize top GitHub repositories into evidence-grounded Codex skills and project scaffolds.
 
 一个 Codex skill：根据用户给出的软件方向，自动扫描 GitHub 高 star 项目，做 LLM 二次相关性重排，总结优缺点，并融合生成新的 Codex skill 或项目骨架。
 
