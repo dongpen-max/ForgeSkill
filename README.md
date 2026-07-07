@@ -1,25 +1,172 @@
 # ForgeSkill
 
-Synthesize top GitHub repositories into evidence-grounded Codex skills and project scaffolds.
+Turn top GitHub repositories into evidence-grounded Codex skills and project scaffolds.
 
-一个 Codex skill：根据用户给出的软件方向，自动扫描 GitHub 高 star 项目，做 LLM 二次相关性重排，总结优缺点，并融合生成新的 Codex skill 或项目骨架。
+ForgeSkill 是一个面向 Codex 的开源生态研究与生成型 skill。它能根据用户提出的软件方向，自动扫描 GitHub 上相关的高 star 项目，筛选真正匹配主题的候选，分析每个项目的优缺点、架构模式、维护状态和可复用设计，然后把这些经验融合成一个新的 Codex skill 或项目骨架。
 
-典型用法：
+它的目标不是简单搬运 GitHub 排行榜，而是把 GitHub 当作一个可研究的开源样本库：先找到相关项目，再用 LLM 做二次判断，最后把多个项目里真正值得复用的模式锻造成新的工具雏形。
+
+## 一句话介绍
+
+ForgeSkill turns open-source project research into new Codex skills and project scaffolds.
+
+中文可以理解为：
+
+> 输入一个软件想法，ForgeSkill 会调研 GitHub 上相关的优秀项目，总结优缺点，并融合生成一个新的 skill 或项目骨架。
+
+## 项目亮点
+
+- **不是 GitHub 排行榜复读机**：ForgeSkill 会先扩大候选池，再用相关度、质量评分和 LLM 二次重排过滤噪声。
+- **适合中文创意输入**：可以把 `AI小说创作`、`智能体框架`、`数据看板` 这类中文或宽泛方向扩展成更适合 GitHub 搜索的英文 query。
+- **有固定融合蓝图**：最终产物不是散乱的调研笔记，而是包含竞品分析、可复用模式、MVP 范围、架构设计和实施计划的结构化方案。
+- **能从研究走到落地**：内置 materializer，可以把融合后的 concept 自动生成新的 Codex skill 或项目 scaffold。
+- **重视证据与安全**：每个结论都应回到仓库证据，不默认复制被调研项目的代码、文档、品牌或资产。
+
+## 典型用法
 
 ```text
 Use $forge-skill to research AI小说创作, summarize the top GitHub projects, and create a better new skill.
 ```
 
-## 能做什么
+或者：
 
-- 自动把中文或宽泛主题扩展成更适合 GitHub 搜索的英文 query。
-- 扫描 GitHub 候选项目，抓取 stars、forks、issues、license、topics、语言、活跃度、README 摘要。
-- 给候选项目计算 `relevance_score` 和 `quality_score`。
-- 生成 LLM rerank worksheet，让 Codex 从候选池里选出真正相关的 top 项目。
-- 按固定融合蓝图输出：研究快照、项目优缺点、跨项目模式、新概念、MVP、架构、实施计划、证据附录。
-- 在用户要求时，把融合结果落地成：
-  - 新 Codex skill
-  - 新项目 scaffold
+```text
+Use $forge-skill to scan GitHub for agent framework projects, compare the best patterns, and scaffold a new project.
+```
+
+## 为什么需要 ForgeSkill
+
+很多新项目并不是从零开始想出来的，而是从已有工具、框架和开源生态中提炼出来的。问题是，手动做这件事很慢：
+
+- GitHub 搜索结果容易被高 star 但不相关的项目污染。
+- 中文想法往往需要转换成多个英文搜索词才能搜准。
+- Stars 只能说明热度，不能说明项目是否适合复用。
+- README 里的卖点、真实架构、维护状态、license 风险需要一起判断。
+- 从“调研结论”到“真正可用的 skill/project scaffold”还需要额外落地步骤。
+
+ForgeSkill 把这些步骤串成一个可复用流程：**发现项目 → 过滤候选 → LLM 重排 → 优缺点分析 → 模式融合 → 生成蓝图 → 自动落地**。
+
+## 核心能力
+
+### GitHub 候选扫描
+
+ForgeSkill 会调用 GitHub API 搜索相关仓库，并抓取候选项目的核心证据：
+
+- stars、forks、open issues
+- license、topics、主语言
+- 最近 push 时间和维护活跃度
+- README 摘要
+- GitHub URL 和 matched query
+
+### 中文与宽泛主题自动扩展
+
+当用户输入类似 `AI小说创作`、`智能体框架`、`数据看板` 这类中文或宽泛主题时，ForgeSkill 会自动扩展成更适合 GitHub 搜索的英文 query。
+
+例如 `AI小说创作` 会扩展出：
+
+```text
+AI novel writing
+AI fiction writing
+AI story generator
+LLM creative writing
+worldbuilding writing assistant
+long-form fiction AI
+```
+
+### 相关度与质量评分
+
+ForgeSkill 不只看 stars。它会给每个候选项目生成两个辅助信号：
+
+- `relevance_score`：项目和用户主题的真实匹配度。
+- `quality_score`：项目作为参考样本的健康度，包括维护活跃度、license 清晰度、README 完整度、fork/issue 比例、topics 等。
+
+这两个分数不会替代判断，而是帮助 Codex 做更可靠的二次筛选。
+
+### LLM 二次重排
+
+ForgeSkill 会生成 `LLM Rerank Worksheet`。Codex 会根据证据判断哪些仓库真正值得进入最终分析，而不是机械选择 star 最高的项目。
+
+它会主动排除：
+
+- 只是碰巧包含关键词的泛项目
+- awesome list 或资料集合
+- 个人主页、组织 profile、内容 dump
+- 只适合学习但不适合借鉴架构的教程项目
+- license 或维护状态明显不适合复用的项目
+
+### 优缺点与可复用模式提炼
+
+对最终入选项目，ForgeSkill 会总结：
+
+- 项目目标和核心用户
+- 主要工作流
+- 产品优点和技术优点
+- 缺点、风险和缺失能力
+- 值得复用的架构、数据模型、prompt/workflow 设计
+- 不应该复制或不适合过度借鉴的部分
+
+### 固定融合蓝图
+
+ForgeSkill 使用固定输出结构，把调研结果变成可执行方案：
+
+- 研究快照
+- LLM 重排后的 Top 项目
+- 项目逐个分析
+- 跨项目模式总结
+- 新概念定位
+- MVP 范围
+- 架构或 skill 设计
+- 实施计划
+- 证据附录
+
+### 自动落地成文件
+
+当用户要求“做出来”“生成 skill”“生成项目骨架”时，ForgeSkill 可以把融合蓝图转换成 JSON spec，并调用内置 materializer 自动创建：
+
+- 新 Codex skill
+- 新项目 scaffold
+
+生成 skill 时会包含 `SKILL.md`、`agents/openai.yaml`、可选 `references/` 和 `scripts/`，并可自动运行 skill validator。
+
+生成项目时会创建 README、blueprint、基础目录结构和可扩展文件。
+
+## 适合场景
+
+ForgeSkill 适合这些任务：
+
+- 基于 GitHub 上成熟项目快速做开源生态研究。
+- 总结某类软件工具的共同模式和设计缺口。
+- 从多个开源项目中融合出一个新的产品方向。
+- 自动创建一个新的 Codex skill。
+- 快速生成项目 scaffold 和 MVP 蓝图。
+- 对某个方向做竞品分析、技术选型或灵感收集。
+- 把“我想做一个类似某类工具”的模糊想法变成可执行计划。
+
+## 工作原理
+
+```text
+User idea
+  -> query expansion
+  -> GitHub candidate scan
+  -> relevance and quality scoring
+  -> LLM rerank worksheet
+  -> project-by-project analysis
+  -> cross-project synthesis
+  -> fusion blueprint
+  -> optional skill/project materialization
+```
+
+这个流程让 ForgeSkill 既能保持自动化速度，又不会把“高 star”误当成“高价值”。它把搜索、证据、判断和落地分开处理，让最终产物更可靠。
+
+## 你会得到什么
+
+一次完整的 ForgeSkill 工作流通常会产出三类结果：
+
+- **GitHub 研究报告**：包含候选项目、stars、维护状态、license、README 摘要、相关度和质量评分。
+- **融合蓝图**：包含 Top 项目重排理由、逐项优缺点、跨项目模式、差异化定位、MVP 范围和实施计划。
+- **可落地文件**：按需生成新的 Codex skill 或项目骨架，包括 README、blueprint、基础目录、`SKILL.md`、`agents/openai.yaml`、`references/` 和 `scripts/`。
+
+换句话说，它把“我想做一个类似某类工具”的一句话，推进到“我知道该参考谁、避免什么、怎么设计、文件已经生成好”的状态。
 
 ## 仓库结构
 
@@ -53,29 +200,26 @@ Copy-Item -Recurse -Force .\forge-skill "$env:USERPROFILE\.codex\skills\forge-sk
 Use $forge-skill to scan AI小说创作 projects on GitHub and synthesize a new skill.
 ```
 
-## 上传到 GitHub
+## 二次开发
 
-如果你已经有一个空 GitHub 仓库，例如：
+如果你想基于 ForgeSkill 做自己的分支，建议优先改这几个位置：
 
 ```text
-https://github.com/YOUR_NAME/ForgeSkill.git
+forge-skill/SKILL.md
+forge-skill/references/fusion_blueprint.md
+forge-skill/references/synthesis_rubric.md
+forge-skill/references/materialization_spec.md
+forge-skill/scripts/github_scan.py
+forge-skill/scripts/materialize.py
 ```
 
-在本仓库根目录执行：
+常见扩展方向：
 
-```powershell
-git remote add origin https://github.com/YOUR_NAME/ForgeSkill.git
-git push -u origin main
-```
-
-如果你安装了 GitHub CLI，也可以直接创建并推送：
-
-```powershell
-gh auth login
-gh repo create ForgeSkill --private --source . --remote origin --push
-```
-
-想公开发布时，把 `--private` 改成 `--public`。
+- 增加更多领域的 query expansion 规则。
+- 改进 `relevance_score` 和 `quality_score` 的评分逻辑。
+- 增加新的 materializer，例如生成 Next.js app、CLI tool、Python package 或插件骨架。
+- 把扫描结果接入数据库、向量检索或长期知识库。
+- 为特定垂直领域定制融合蓝图，例如写作、设计、数据分析、agent、DevOps。
 
 ## 推荐工作流
 
@@ -343,6 +487,8 @@ $env:GH_TOKEN="your_token_here"
 
 脚本会自动读取这两个环境变量。
 
+注意：不要把真实 token 写进 README、JSON spec、脚本默认值或提交历史。ForgeSkill 只需要从本地环境变量读取 token，不需要把密钥保存到仓库里。
+
 ## 验证
 
 验证本 skill：
@@ -414,3 +560,11 @@ python .\forge-skill\scripts\materialize.py --help
 - 不复制被调研项目的代码、文档、品牌或资产，除非 license 允许且用户明确要求。
 - 融合时保留强模式，舍弃噪声功能。
 - 生成 skill 时保持 `SKILL.md` 精简，把复杂规则放入 `references/`，把确定性流程放入 `scripts/`。
+
+## 安全与合规
+
+- ForgeSkill 不要求把 GitHub token、OpenAI key 或其他密钥写入仓库。
+- GitHub token 仅通过 `GITHUB_TOKEN` 或 `GH_TOKEN` 环境变量读取。
+- 研究报告应区分事实证据和 Codex 的推断。
+- 生成新项目时默认借鉴设计模式和工作流，不复制第三方代码、文档、品牌、图片或专有资产。
+- 如需复用第三方代码，必须先检查 license，并在新项目中保留必要的 attribution 和 license notice。
