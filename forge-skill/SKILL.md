@@ -1,9 +1,9 @@
 ---
-name: github-skill-synthesizer
+name: forge-skill
 description: "Research and synthesize top-starred GitHub projects for a user-specified category using a two-stage process: GitHub candidate discovery plus LLM relevance reranking, then produce a fixed fusion blueprint, implementation plan, scaffold, project, or Codex skill. Use when the user asks to scan, compare, summarize, learn from, fuse, combine, generate, scaffold, materialize, or create a new project or skill based on popular GitHub repositories in a domain such as AI novel writing, agent frameworks, dashboards, developer tools, or similar software categories."
 ---
 
-# GitHub Skill Synthesizer
+# ForgeSkill
 
 ## Overview
 

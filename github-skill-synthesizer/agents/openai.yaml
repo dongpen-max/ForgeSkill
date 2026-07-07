@@ -1,4 +1,0 @@
-interface:
-  display_name: "GitHub Skill Synthesizer"
-  short_description: "LLM-rerank GitHub projects and synthesize a new skill or project."
-  default_prompt: "Use $github-skill-synthesizer to research the top-starred GitHub projects for AI novel writing and synthesize a better new skill."

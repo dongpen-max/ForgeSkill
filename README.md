@@ -7,7 +7,7 @@ Synthesize top GitHub repositories into evidence-grounded Codex skills and proje
 典型用法：
 
 ```text
-Use $github-skill-synthesizer to research AI小说创作, summarize the top GitHub projects, and create a better new skill.
+Use $forge-skill to research AI小说创作, summarize the top GitHub projects, and create a better new skill.
 ```
 
 ## 能做什么
@@ -24,7 +24,7 @@ Use $github-skill-synthesizer to research AI小说创作, summarize the top GitH
 ## 仓库结构
 
 ```text
-github-skill-synthesizer/
+forge-skill/
   SKILL.md
   agents/
     openai.yaml
@@ -39,18 +39,18 @@ github-skill-synthesizer/
 
 ## 安装到 Codex
 
-把本仓库里的 `github-skill-synthesizer/` 文件夹复制到你的 Codex skills 目录。
+把本仓库里的 `forge-skill/` 文件夹复制到你的 Codex skills 目录。
 
 Windows PowerShell:
 
 ```powershell
-Copy-Item -Recurse -Force .\github-skill-synthesizer "$env:USERPROFILE\.codex\skills\github-skill-synthesizer"
+Copy-Item -Recurse -Force .\forge-skill "$env:USERPROFILE\.codex\skills\forge-skill"
 ```
 
 安装后，在新对话或刷新后的 Codex 会话里可以直接调用：
 
 ```text
-Use $github-skill-synthesizer to scan AI小说创作 projects on GitHub and synthesize a new skill.
+Use $forge-skill to scan AI小说创作 projects on GitHub and synthesize a new skill.
 ```
 
 ## 上传到 GitHub
@@ -58,13 +58,13 @@ Use $github-skill-synthesizer to scan AI小说创作 projects on GitHub and synt
 如果你已经有一个空 GitHub 仓库，例如：
 
 ```text
-https://github.com/YOUR_NAME/github-skill-synthesizer.git
+https://github.com/YOUR_NAME/ForgeSkill.git
 ```
 
 在本仓库根目录执行：
 
 ```powershell
-git remote add origin https://github.com/YOUR_NAME/github-skill-synthesizer.git
+git remote add origin https://github.com/YOUR_NAME/ForgeSkill.git
 git push -u origin main
 ```
 
@@ -72,7 +72,7 @@ git push -u origin main
 
 ```powershell
 gh auth login
-gh repo create github-skill-synthesizer --private --source . --remote origin --push
+gh repo create ForgeSkill --private --source . --remote origin --push
 ```
 
 想公开发布时，把 `--private` 改成 `--public`。
@@ -103,7 +103,7 @@ Codex 会触发本 skill，并按以下顺序执行：
 直接运行：
 
 ```powershell
-python .\github-skill-synthesizer\scripts\github_scan.py "AI小说创作" --limit 10 --candidate-limit 30 --out work\ai-novel-scan.json
+python .\forge-skill\scripts\github_scan.py "AI小说创作" --limit 10 --candidate-limit 30 --out work\ai-novel-scan.json
 ```
 
 它会同时生成：
@@ -147,7 +147,7 @@ AI writing assistant
 如果你想精确搜索，不想自动扩展：
 
 ```powershell
-python .\github-skill-synthesizer\scripts\github_scan.py "exact topic" --no-auto-expand
+python .\forge-skill\scripts\github_scan.py "exact topic" --no-auto-expand
 ```
 
 ### 4. LLM 二次重排
@@ -169,19 +169,19 @@ python .\github-skill-synthesizer\scripts\github_scan.py "exact topic" --no-auto
 ### 扫描 AI 小说创作项目
 
 ```powershell
-python .\github-skill-synthesizer\scripts\github_scan.py "AI小说创作" --limit 10 --candidate-limit 30 --out work\ai-novel-scan.json
+python .\forge-skill\scripts\github_scan.py "AI小说创作" --limit 10 --candidate-limit 30 --out work\ai-novel-scan.json
 ```
 
 ### 扫描 agent 框架
 
 ```powershell
-python .\github-skill-synthesizer\scripts\github_scan.py "AI agent framework" --limit 10 --candidate-limit 40 --out work\agent-framework-scan.json
+python .\forge-skill\scripts\github_scan.py "AI agent framework" --limit 10 --candidate-limit 40 --out work\agent-framework-scan.json
 ```
 
 ### 增加自定义 query
 
 ```powershell
-python .\github-skill-synthesizer\scripts\github_scan.py "AI writing" `
+python .\forge-skill\scripts\github_scan.py "AI writing" `
   --query "AI novel writing" `
   --query "worldbuilding writing assistant" `
   --query "LLM fiction writing" `
@@ -195,13 +195,13 @@ python .\github-skill-synthesizer\scripts\github_scan.py "AI writing" `
 默认只搜 name 和 description，避免 README 里的泛词污染结果。如果结果太少，可以加 README：
 
 ```powershell
-python .\github-skill-synthesizer\scripts\github_scan.py "AI小说创作" --search-fields name,description,readme
+python .\forge-skill\scripts\github_scan.py "AI小说创作" --search-fields name,description,readme
 ```
 
 ### 调整相关性阈值
 
 ```powershell
-python .\github-skill-synthesizer\scripts\github_scan.py "AI小说创作" --min-relevance 4
+python .\forge-skill\scripts\github_scan.py "AI小说创作" --min-relevance 4
 ```
 
 阈值越高，候选越干净，但可能漏掉项目。
@@ -246,7 +246,7 @@ work\spec.json
 然后执行：
 
 ```powershell
-python .\github-skill-synthesizer\scripts\materialize.py skill work\spec.json `
+python .\forge-skill\scripts\materialize.py skill work\spec.json `
   --out-dir "$env:USERPROFILE\.codex\skills" `
   --validate-script "$env:USERPROFILE\.codex\skills\.system\skill-creator\scripts\quick_validate.py"
 ```
@@ -309,7 +309,7 @@ python .\github-skill-synthesizer\scripts\materialize.py skill work\spec.json `
 执行：
 
 ```powershell
-python .\github-skill-synthesizer\scripts\materialize.py project work\spec.json --out-dir work\generated-projects
+python .\forge-skill\scripts\materialize.py project work\spec.json --out-dir work\generated-projects
 ```
 
 会生成：
@@ -348,14 +348,14 @@ $env:GH_TOKEN="your_token_here"
 验证本 skill：
 
 ```powershell
-python "$env:USERPROFILE\.codex\skills\.system\skill-creator\scripts\quick_validate.py" .\github-skill-synthesizer
+python "$env:USERPROFILE\.codex\skills\.system\skill-creator\scripts\quick_validate.py" .\forge-skill
 ```
 
 检查脚本帮助：
 
 ```powershell
-python .\github-skill-synthesizer\scripts\github_scan.py --help
-python .\github-skill-synthesizer\scripts\materialize.py --help
+python .\forge-skill\scripts\github_scan.py --help
+python .\forge-skill\scripts\materialize.py --help
 ```
 
 ## 排错

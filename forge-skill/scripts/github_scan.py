@@ -119,7 +119,7 @@ def get_token() -> str | None:
 def github_request(url: str, *, accept: str = "application/vnd.github+json") -> Any:
     headers = {
         "Accept": accept,
-        "User-Agent": "codex-github-skill-synthesizer",
+        "User-Agent": "codex-forge-skill",
         "X-GitHub-Api-Version": "2022-11-28",
     }
     token = get_token()
