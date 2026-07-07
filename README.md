@@ -51,6 +51,30 @@ Copy-Item -Recurse -Force .\github-skill-synthesizer "$env:USERPROFILE\.codex\sk
 Use $github-skill-synthesizer to scan AI小说创作 projects on GitHub and synthesize a new skill.
 ```
 
+## 上传到 GitHub
+
+如果你已经有一个空 GitHub 仓库，例如：
+
+```text
+https://github.com/YOUR_NAME/github-skill-synthesizer.git
+```
+
+在本仓库根目录执行：
+
+```powershell
+git remote add origin https://github.com/YOUR_NAME/github-skill-synthesizer.git
+git push -u origin main
+```
+
+如果你安装了 GitHub CLI，也可以直接创建并推送：
+
+```powershell
+gh auth login
+gh repo create github-skill-synthesizer --private --source . --remote origin --push
+```
+
+想公开发布时，把 `--private` 改成 `--public`。
+
 ## 推荐工作流
 
 ### 1. 用户提出方向
@@ -388,4 +412,3 @@ python .\github-skill-synthesizer\scripts\materialize.py --help
 - 不复制被调研项目的代码、文档、品牌或资产，除非 license 允许且用户明确要求。
 - 融合时保留强模式，舍弃噪声功能。
 - 生成 skill 时保持 `SKILL.md` 精简，把复杂规则放入 `references/`，把确定性流程放入 `scripts/`。
-
