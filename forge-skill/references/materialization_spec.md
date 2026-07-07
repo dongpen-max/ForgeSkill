@@ -13,7 +13,7 @@ Use this reference when the user wants the synthesis turned into an actual Codex
 ## Skill Command
 
 ```bash
-python <skill-dir>/scripts/materialize.py skill work/spec.json --out-dir C:/Users/ZhuanZ1/.codex/skills --validate-script C:/Users/ZhuanZ1/.codex/skills/.system/skill-creator/scripts/quick_validate.py
+python <skill-dir>/scripts/materialize.py skill work/spec.json --out-dir <codex-home>/skills --validate-script <codex-home>/skills/.system/skill-creator/scripts/quick_validate.py
 ```
 
 Use `--force` only when intentionally overwriting a generated artifact.
