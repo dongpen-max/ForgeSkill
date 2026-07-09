@@ -1,0 +1,25 @@
+# ForgeSkill Config
+# Per-user or per-project configuration file.
+# Place in forge-skill/forge-skill.toml or ~/.forge-skill/config.toml
+
+[defaults]
+min_stars = 0
+limit = 10
+candidate_limit = 30
+search_fields = "name,description"
+min_relevance = 2
+readme_chars = 6000
+max_query_variants = 8
+cache_ttl_hours = 1
+max_workers = 5
+
+[github]
+# Leave empty to use anonymous requests (low rate limit)
+# token = "github_pat_..."
+
+[expansion_rules]
+# Path to custom expansion rules JSON file (optional)
+# path = "./custom-rules.json"
+
+[progress]
+enabled = true

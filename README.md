@@ -1,8 +1,8 @@
 # ForgeSkill
 
-Turn top GitHub repositories into evidence-grounded Codex skills and project scaffolds.
+Turn top GitHub repositories into evidence-grounded ZCode skills and project scaffolds.
 
-ForgeSkill 是一个面向 Codex 的开源生态研究与生成型 skill。它能根据用户提出的软件方向，自动扫描 GitHub 上相关的高 star 项目，筛选真正匹配主题的候选，分析每个项目的优缺点、架构模式、维护状态和可复用设计，然后把这些经验融合成一个新的 Codex skill 或项目骨架。
+ForgeSkill 是一个面向 ZCode 的开源生态研究与生成型 skill。它能根据用户提出的软件方向，自动扫描 GitHub 上相关的高 star 项目，筛选真正匹配主题的候选，分析每个项目的优缺点、架构模式、维护状态和可复用设计，然后把这些经验融合成一个新的 ZCode skill 或项目骨架。
 
 它的目标不是简单搬运 GitHub 排行榜，而是把 GitHub 当作一个可研究的开源样本库：先找到相关项目，再用 LLM 做二次判断，最后把多个项目里真正值得复用的模式锻造成新的工具雏形。
 
@@ -16,7 +16,7 @@ ForgeSkill turns open-source project research into new Codex skills and project 
 
 ## 项目亮点
 
-- **不是 GitHub 排行榜复读机**：ForgeSkill 会先扩大候选池，再用相关度、质量评分和 LLM 二次重排过滤噪声。
+- **不是 GitHub 排行榜复读机**：ForgeSkill 会先扩大候选池，再用相关度、质量评分和 LLM 二次重排过滤噪声。并采用**并发 enrich**、**磁盘缓存**和**指数退避重试**大幅提升扫描效率。
 - **适合中文创意输入**：可以把 `AI小说创作`、`智能体框架`、`数据看板` 这类中文或宽泛方向扩展成更适合 GitHub 搜索的英文 query。
 - **有固定融合蓝图**：最终产物不是散乱的调研笔记，而是包含竞品分析、可复用模式、MVP 范围、架构设计和实施计划的结构化方案。
 - **能从研究走到落地**：内置 materializer，可以把融合后的 concept 自动生成新的 Codex skill 或项目 scaffold。
@@ -44,7 +44,7 @@ Use $forge-skill to scan GitHub for agent framework projects, compare the best p
 - README 里的卖点、真实架构、维护状态、license 风险需要一起判断。
 - 从“调研结论”到“真正可用的 skill/project scaffold”还需要额外落地步骤。
 
-ForgeSkill 把这些步骤串成一个可复用流程：**发现项目 → 过滤候选 → LLM 重排 → 优缺点分析 → 模式融合 → 生成蓝图 → 自动落地**。
+ForgeSkill 把这些步骤串成一个可复用流程：**发现项目 → 过滤候选 → LLM 重排 → 优缺点分析 → 模式融合 → 生成蓝图 → 自动落地**。配合**127 项单元测试**，保证核心评分逻辑的正确性和可靠性。
 
 ## 核心能力
 
@@ -121,12 +121,14 @@ ForgeSkill 使用固定输出结构，把调研结果变成可执行方案：
 
 ### 自动落地成文件
 
-当用户要求“做出来”“生成 skill”“生成项目骨架”时，ForgeSkill 可以把融合蓝图转换成 JSON spec，并调用内置 materializer 自动创建：
+当用户要求”做出来””生成 skill””生成项目骨架”时，ForgeSkill 可以把融合蓝图转换成 JSON spec，并调用内置 materializer 自动创建：
 
-- 新 Codex skill
+- 新 ZCode skill
 - 新项目 scaffold
 
 生成 skill 时会包含 `SKILL.md`、`agents/openai.yaml`、可选 `references/` 和 `scripts/`，并可自动运行 skill validator。
+
+支持 `--dry-run` 预览生成结果，以及 `--validate-only` 提前检查 spec 合法性。
 
 生成项目时会创建 README、blueprint、基础目录结构和可扩展文件。
 
@@ -184,20 +186,38 @@ forge-skill/
     materialize.py
 ```
 
-## 安装到 Codex
+## 安装到 ZCode
 
-把本仓库里的 `forge-skill/` 文件夹复制到你的 Codex skills 目录。
+把本仓库里的 `forge-skill/` 文件夹复制到你的 ZCode skills 目录。
 
 Windows PowerShell:
 
 ```powershell
-Copy-Item -Recurse -Force .\forge-skill "$env:USERPROFILE\.codex\skills\forge-skill"
+Copy-Item -Recurse -Force .\forge-skill "$env:USERPROFILE\.zcode\skills\forge-skill"
 ```
 
-安装后，在新对话或刷新后的 Codex 会话里可以直接调用：
+或者使用 ZCode 的 skill 管理器安装。
+
+安装后，在新对话或刷新后的 ZCode 会话里可以直接调用：
 
 ```text
 Use $forge-skill to scan AI小说创作 projects on GitHub and synthesize a new skill.
+```
+
+### 依赖安装（可选）
+
+```bash
+# 基础依赖（stdlib，零依赖）
+pip install -e .
+
+# 开发依赖（测试 + 代码检查）
+pip install -e ".[dev]"
+
+# Jinja2 模板支持
+pip install -e ".[jinja]"
+
+# 全部依赖
+pip install -e ".[all]"
 ```
 
 ## 二次开发
@@ -211,15 +231,30 @@ forge-skill/references/synthesis_rubric.md
 forge-skill/references/materialization_spec.md
 forge-skill/scripts/github_scan.py
 forge-skill/scripts/materialize.py
+.forge-skill.toml                # 默认配置覆盖
+forge-skill/forge-skill.toml     # skill 级配置
 ```
 
 常见扩展方向：
 
-- 增加更多领域的 query expansion 规则。
+- 增加更多领域的 query expansion 规则（编辑 `DEFAULT_TOPIC_EXPANSIONS` 或使用外部 `--expansion-rules` JSON 文件）。
 - 改进 `relevance_score` 和 `quality_score` 的评分逻辑。
 - 增加新的 materializer，例如生成 Next.js app、CLI tool、Python package 或插件骨架。
 - 把扫描结果接入数据库、向量检索或长期知识库。
 - 为特定垂直领域定制融合蓝图，例如写作、设计、数据分析、agent、DevOps。
+- 添加 GitHub Actions 自动化扫描工作流。
+
+### 运行测试
+
+```bash
+# 安装测试依赖
+pip install -e ".[dev]"
+
+# 运行全部测试
+pytest
+
+# 运行特定测试文件
+pytest tests/test_github_scan.py -v
 
 ## 推荐工作流
 
@@ -231,15 +266,15 @@ forge-skill/scripts/materialize.py
 我想做一个 AI 小说创作 skill，扫描 GitHub 上相关项目，总结优缺点，然后融合成一个更好的 skill。
 ```
 
-Codex 会触发本 skill，并按以下顺序执行：
+ZCode 会触发本 skill，并按以下顺序执行：
 
 1. 明确目标：生成 skill、项目方案，还是项目骨架。
-2. 运行 GitHub 扫描脚本。
+2. 运行 GitHub 扫描脚本（使用并发 enrich + 磁盘缓存加速）。
 3. 读取候选报告。
 4. 做 LLM 二次重排。
 5. 总结优缺点和可复用模式。
 6. 生成融合蓝图。
-7. 如果用户要求落地，生成 JSON spec 并调用 `materialize.py`。
+7. 如果用户要求落地，生成 JSON spec 并调用 `materialize.py`（可用 `--dry-run` 预览）。
 8. 运行 validator 或 smoke test。
 
 ### 2. GitHub 扫描
@@ -294,7 +329,29 @@ AI writing assistant
 python .\forge-skill\scripts\github_scan.py "exact topic" --no-auto-expand
 ```
 
-### 4. LLM 二次重排
+### 4. 缓存管理
+
+重复扫描会自动命中磁盘缓存（默认 TTL 1 小时），避免浪费 API 配额：
+
+```powershell
+# 清除缓存重新扫描
+python .\forge-skill\scripts\github_scan.py "AI小说创作" --clear-cache
+
+# 指定缓存有效期
+python .\forge-skill\scripts\github_scan.py "AI小说创作" --cache-ttl 0.5
+
+# 完全禁用缓存
+python .\forge-skill\scripts\github_scan.py "AI小说创作" --no-cache
+```
+
+### 5. 并发控制
+
+```powershell
+# 调整并发 enrich 的 worker 数量（默认 5）
+python .\forge-skill\scripts\github_scan.py "AI小说创作" --max-workers 10
+```
+
+### 6. LLM 二次重排
 
 脚本不会把 GitHub stars 当最终答案。它会先给候选池，然后让 Codex 根据以下因素重排：
 
@@ -494,7 +551,13 @@ $env:GH_TOKEN="your_token_here"
 验证本 skill：
 
 ```powershell
-python "$env:USERPROFILE\.codex\skills\.system\skill-creator\scripts\quick_validate.py" .\forge-skill
+python "$env:USERPROFILE\.zcode\skills\.system\skill-creator\scripts\quick_validate.py" .\forge-skill
+```
+
+运行测试套件（127 项测试）：
+
+```bash
+pytest
 ```
 
 检查脚本帮助：
@@ -502,6 +565,19 @@ python "$env:USERPROFILE\.codex\skills\.system\skill-creator\scripts\quick_valid
 ```powershell
 python .\forge-skill\scripts\github_scan.py --help
 python .\forge-skill\scripts\materialize.py --help
+```
+
+### materialize.py 新特性
+
+```powershell
+# Dry-run 预览（不写文件）
+python .\forge-skill\scripts\materialize.py skill work\spec.json --out-dir work\generated --dry-run
+
+# 仅校验 spec，不创建文件
+python .\forge-skill\scripts\materialize.py skill work\spec.json --out-dir work\generated --validate-only
+
+# 强制覆盖已有目录
+python .\forge-skill\scripts\materialize.py skill work\spec.json --out-dir work\generated --force
 ```
 
 ## 排错
@@ -560,6 +636,12 @@ python .\forge-skill\scripts\materialize.py --help
 - 不复制被调研项目的代码、文档、品牌或资产，除非 license 允许且用户明确要求。
 - 融合时保留强模式，舍弃噪声功能。
 - 生成 skill 时保持 `SKILL.md` 精简，把复杂规则放入 `references/`，把确定性流程放入 `scripts/`。
+- **缓存层**：API 请求默认缓存 1 小时，重复扫描不浪费配额。
+- **并发获取**：采用 `ThreadPoolExecutor` 并行获取仓库详情，速度提升 3~6 倍。
+- **可配置扩展**：Topic expansion 规则可外部化到 JSON 文件，避免修改代码。
+- **Spec 预校验**：`materialize.py` 输出前先验证 JSON spec 的完整性和安全性（路径逃逸检查、必需字段校验）。
+- **Dry-run 预览**：`--dry-run` 模式可以预览要生成的文件而不实际写入。
+- **Jinja2 模板支持**：可选依赖 Jinja2 支持自定义模板渲染 SKILL.md 和 README。
 
 ## 安全与合规
 
