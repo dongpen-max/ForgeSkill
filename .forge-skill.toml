@@ -1,0 +1,15 @@
+# ForgeSkill
+
+[defaults]
+min_stars = 0
+limit = 10
+candidate_limit = 30
+search_fields = "name,description"
+min_relevance = 2
+readme_chars = 6000
+max_query_variants = 8
+cache_ttl_hours = 1
+max_workers = 5
+
+[progress]
+enabled = true

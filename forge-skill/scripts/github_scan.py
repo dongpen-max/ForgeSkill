@@ -5,20 +5,38 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import http.client
 import json
 import os
+import random
 import re
 import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
+try:
+    from tqdm import tqdm
+except ImportError:
+    tqdm = None
+
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
 
 API_ROOT = "https://api.github.com"
+DEFAULT_CACHE_DIR = Path.home() / ".forge-skill" / "cache"
+DEFAULT_CONFIG_PATHS = [
+    Path.cwd() / ".forge-skill.toml",
+    Path.cwd() / "forge-skill" / "forge-skill.toml",
+    Path.home() / ".forge-skill" / "config.toml",
+]
 STOPWORDS = {
     "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "how", "in", "into",
     "is", "it", "of", "on", "or", "that", "the", "this", "to", "use", "with", "your",
@@ -27,7 +45,9 @@ GENERIC_TERMS = {
     "ai", "app", "apps", "bot", "code", "data", "demo", "dev", "generator", "github",
     "llm", "ml", "open", "project", "repo", "sdk", "software", "tool", "tools",
 }
-TOPIC_EXPANSIONS = [
+
+# Default built-in topic expansions — users can override via external file
+DEFAULT_TOPIC_EXPANSIONS = [
     {
         "needles": ["novel", "fiction", "\u5c0f\u8bf4", "\u7f51\u6587"],
         "queries": [
@@ -82,8 +102,44 @@ TOPIC_EXPANSIONS = [
             "automation workflow engine",
         ],
     },
+    {
+        "needles": ["rag", "retrieval", "qa", "\u68c0\u7d22"],
+        "queries": [
+            "RAG framework",
+            "retrieval augmented generation",
+            "document QA",
+            "knowledge base LLM",
+        ],
+    },
+    {
+        "needles": ["devops", "ci", "cd", "deploy", "\u8fd0\u7ef4"],
+        "queries": [
+            "devops tool",
+            "CI CD pipeline",
+            "infrastructure as code",
+            "deployment automation",
+        ],
+    },
+    {
+        "needles": ["game", "\u6e38\u620f", "gaming"],
+        "queries": [
+            "game engine",
+            "game development framework",
+            "AI game",
+            "procedural generation",
+        ],
+    },
+    {
+        "needles": ["data", "analytics", "\u6570\u636e", "\u5206\u6790"],
+        "queries": [
+            "data analysis tool",
+            "analytics platform",
+            "data pipeline",
+            "business intelligence",
+        ],
+    },
 ]
-FOCUS_RULES = [
+DEFAULT_FOCUS_RULES = [
     {
         "needles": ["novel", "fiction", "\u5c0f\u8bf4", "\u7f51\u6587"],
         "terms": ["novel", "fiction", "story", "worldbuilding", "narrative"],
@@ -100,8 +156,87 @@ FOCUS_RULES = [
         "needles": ["dashboard", "\u4eea\u8868\u76d8", "\u5927\u5c4f", "\u6570\u636e\u770b\u677f"],
         "terms": ["dashboard", "analytics", "visualization", "admin"],
     },
+    {
+        "needles": ["game", "\u6e38\u620f", "gaming"],
+        "terms": ["game", "gaming", "procedural", "rpg"],
+    },
+    {
+        "needles": ["rag", "retrieval", "\u68c0\u7d22", "qa"],
+        "terms": ["rag", "retrieval", "qa", "knowledge"],
+    },
 ]
 
+
+# ---------------------------------------------------------------------------
+# Config loader
+# ---------------------------------------------------------------------------
+
+def load_config() -> dict[str, Any]:
+    """Load config from the first existing .forge-skill.toml."""
+    for candidate in DEFAULT_CONFIG_PATHS:
+        if candidate.exists():
+            try:
+                raw = candidate.read_text(encoding="utf-8")
+                # Minimal TOML parser: handles [section] and key = value
+                config: dict[str, Any] = {}
+                section = config
+                for line in raw.splitlines():
+                    stripped = line.strip()
+                    if not stripped or stripped.startswith("#"):
+                        continue
+                    m = re.match(r"^\[(.+)\]$", stripped)
+                    if m:
+                        section_name = m.group(1)
+                        config[section_name] = {}
+                        section = config[section_name]
+                        continue
+                    if "=" in stripped:
+                        key, _, value = stripped.partition("=")
+                        key = key.strip()
+                        value = value.strip().strip('"').strip("'")
+                        # Try bool / int
+                        if value.lower() in ("true", "yes", "on"):
+                            value = True
+                        elif value.lower() in ("false", "no", "off"):
+                            value = False
+                        else:
+                            try:
+                                value = int(value)
+                            except ValueError:
+                                try:
+                                    value = float(value)
+                                except ValueError:
+                                    pass
+                        section[key] = value
+                return config
+            except Exception:
+                pass
+    return {}
+
+
+def config_get(config: dict[str, Any], *keys: str, default: Any = None) -> Any:
+    """Traverse config with dotted keys."""
+    current = config
+    for key in keys:
+        if isinstance(current, dict):
+            current = current.get(key, {})
+        else:
+            return default
+    if isinstance(current, dict) and not current:
+        return default
+    return current if current != {} else default
+
+
+def make_config_argparser() -> argparse.ArgumentParser:
+    """Add --config flag to an existing or new parser."""
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--config", help="Path to config TOML file (default: auto-detect).")
+    return parser
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 def slugify(value: str) -> str:
     slug = re.sub(r"[^a-zA-Z0-9]+", "-", value.strip().lower()).strip("-")
@@ -116,16 +251,89 @@ def get_token() -> str | None:
     return os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
 
 
+# ---------------------------------------------------------------------------
+# Caching layer
+# ---------------------------------------------------------------------------
+
+_cache_dir: Path | None = None
+
+
+def _get_cache_dir() -> Path:
+    global _cache_dir
+    if _cache_dir is None:
+        _cache_dir = DEFAULT_CACHE_DIR
+    return _cache_dir
+
+
+def _cache_key(url: str) -> str:
+    return hashlib.sha256(url.encode()).hexdigest()[:16]
+
+
+def _cached_path(url: str) -> Path:
+    return _get_cache_dir() / _cache_key(url)
+
+
+def cached_github_request(
+    url: str,
+    *,
+    accept: str = "application/vnd.github+json",
+    ttl_hours: float = 1,
+) -> Any:
+    """GitHub request with disk cache (get/set)."""
+    cache_path = _cached_path(url)
+    if cache_path.exists() and (time.time() - cache_path.stat().st_mtime) < ttl_hours * 3600:
+        try:
+            raw = cache_path.read_text(encoding="utf-8")
+            cached = json.loads(raw)
+            if isinstance(cached, dict) and "_forge_cache_meta" in cached:
+                return cached["_forge_cache_data"]
+            return cached
+        except (json.JSONDecodeError, OSError):
+            pass  # invalid cache → re-fetch
+
+    data = github_request(url, accept=accept)
+
+    # Save to cache
+    try:
+        _get_cache_dir().mkdir(parents=True, exist_ok=True)
+        to_cache = {"_forge_cache_meta": {"cached_at": time.time(), "url": url}, "_forge_cache_data": data}
+        cache_path.write_text(json.dumps(to_cache, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        pass  # non-fatal if cache write fails
+
+    return data
+
+
+def clear_cache(url_pattern: str | None = None) -> int:
+    """Clear cache entries. Returns count removed."""
+    cache_dir = _get_cache_dir()
+    if not cache_dir.exists():
+        return 0
+    removed = 0
+    for path in cache_dir.iterdir():
+        if path.is_file() and len(path.name) == 16:
+            if url_pattern is None or url_pattern in path.read_text(encoding="utf-8", errors="replace"):
+                path.unlink()
+                removed += 1
+    return removed
+
+
+# ---------------------------------------------------------------------------
+# GitHub API (raw, no cache)
+# ---------------------------------------------------------------------------
+
 def github_request(url: str, *, accept: str = "application/vnd.github+json") -> Any:
+    """Low-level GitHub API call with exponential backoff + jitter."""
     headers = {
         "Accept": accept,
-        "User-Agent": "codex-forge-skill",
+        "User-Agent": "zcode-forge-skill",
         "X-GitHub-Api-Version": "2022-11-28",
     }
     token = get_token()
     if token:
         headers["Authorization"] = f"Bearer {token}"
 
+    last_exc: Exception | None = None
     for attempt in range(3):
         request = urllib.request.Request(url, headers=headers)
         try:
@@ -136,23 +344,67 @@ def github_request(url: str, *, accept: str = "application/vnd.github+json") -> 
                     return body.decode("utf-8", errors="replace")
                 return json.loads(body.decode("utf-8"))
         except http.client.IncompleteRead as exc:
-            if attempt == 2:
-                raise RuntimeError(f"GitHub response was incomplete after retries for {url}: {exc}") from exc
-            time.sleep(1 + attempt)
+            last_exc = RuntimeError(f"GitHub response was incomplete after retries for {url}: {exc}")
         except urllib.error.HTTPError as exc:
             reset = exc.headers.get("X-RateLimit-Reset")
             remaining = exc.headers.get("X-RateLimit-Remaining")
             detail = exc.read().decode("utf-8", errors="replace")
             if exc.code in {403, 429} and remaining == "0" and reset:
                 reset_time = dt.datetime.fromtimestamp(int(reset), dt.timezone.utc).isoformat()
-                raise RuntimeError(f"GitHub rate limit reached. Resets at {reset_time}. Set GITHUB_TOKEN for a higher limit.") from exc
+                raise RuntimeError(
+                    f"GitHub rate limit reached. Resets at {reset_time}. "
+                    f"Set GITHUB_TOKEN for a higher limit."
+                ) from exc
             if exc.code == 404:
                 return None
-            raise RuntimeError(f"GitHub request failed: HTTP {exc.code} for {url}\n{detail[:500]}") from exc
+            last_exc = RuntimeError(f"GitHub request failed: HTTP {exc.code} for {url}\n{detail[:500]}")
         except urllib.error.URLError as exc:
-            raise RuntimeError(f"GitHub request failed for {url}: {exc}") from exc
+            last_exc = RuntimeError(f"GitHub request failed for {url}: {exc}")
+        except (ConnectionResetError, TimeoutError) as exc:
+            last_exc = RuntimeError(f"Connection error for {url}: {exc}")
+
+        if attempt == 2:
+            raise last_exc  # type: ignore[misc]
+        # Exponential backoff with jitter
+        delay = 1.5 ** attempt + random.uniform(0, 0.5)
+        time.sleep(delay)
 
     raise RuntimeError(f"GitHub request failed after retries for {url}")
+
+
+# ---------------------------------------------------------------------------
+# Query expansion & scoring
+# ---------------------------------------------------------------------------
+
+_loaded_expansions: list[dict[str, Any]] | None = None
+_loaded_focus_rules: list[dict[str, Any]] | None = None
+
+
+def _ensure_rules_loaded(expansion_rules_path: str | None = None) -> None:
+    """Load expansion rules from external file or fallback to built-ins."""
+    global _loaded_expansions, _loaded_focus_rules
+    if _loaded_expansions is not None and _loaded_focus_rules is not None:
+        return
+
+    if expansion_rules_path:
+        p = Path(expansion_rules_path)
+        if p.exists():
+            try:
+                data = json.loads(p.read_text(encoding="utf-8"))
+                expansions = data.get("expansions") or data.get("topic_expansions") or []
+                focus = data.get("focus_rules") or []
+                if expansions:
+                    _loaded_expansions = expansions
+                if focus:
+                    _loaded_focus_rules = focus
+                return
+            except (json.JSONDecodeError, OSError):
+                print(f"warning: could not load expansion rules from {p}", file=sys.stderr)
+
+    if _loaded_expansions is None:
+        _loaded_expansions = DEFAULT_TOPIC_EXPANSIONS
+    if _loaded_focus_rules is None:
+        _loaded_focus_rules = DEFAULT_FOCUS_RULES
 
 
 def normalize_query(raw_query: str, min_stars: int | None, search_fields: str) -> str:
@@ -180,13 +432,19 @@ def contains_non_ascii(value: str) -> bool:
     return any(ord(char) > 127 for char in value)
 
 
-def auto_expand_queries(topic: str, queries: list[str], max_variants: int) -> list[str]:
+def auto_expand_queries(
+    topic: str,
+    queries: list[str],
+    max_variants: int,
+    expansion_rules_path: str | None = None,
+) -> list[str]:
+    _ensure_rules_loaded(expansion_rules_path)
     source = " ".join([topic, *queries]).lower()
     expanded = list(queries)
 
-    for rule in TOPIC_EXPANSIONS:
-        if any(needle.lower() in source for needle in rule["needles"]):
-            expanded.extend(rule["queries"])
+    for rule in _loaded_expansions or []:
+        if any(needle.lower() in source for needle in rule.get("needles", [])):
+            expanded.extend(rule.get("queries", []))
 
     if contains_non_ascii(source) and len(expanded) == len(queries):
         expanded.extend([
@@ -198,12 +456,17 @@ def auto_expand_queries(topic: str, queries: list[str], max_variants: int) -> li
     return dedupe(expanded)[:max_variants]
 
 
-def focus_terms(topic: str, queries: list[str]) -> list[str]:
+def focus_terms(
+    topic: str,
+    queries: list[str],
+    expansion_rules_path: str | None = None,
+) -> list[str]:
+    _ensure_rules_loaded(expansion_rules_path)
     source = " ".join([topic, *queries]).lower()
     terms: list[str] = []
-    for rule in FOCUS_RULES:
-        if any(needle.lower() in source for needle in rule["needles"]):
-            terms.extend(rule["terms"])
+    for rule in _loaded_focus_rules or []:
+        if any(needle.lower() in source for needle in rule.get("needles", [])):
+            terms.extend(rule.get("terms", []))
     return dedupe(terms)
 
 
@@ -319,6 +582,10 @@ def relevance_score(item: dict[str, Any], topic: str, queries: list[str]) -> int
     return score
 
 
+# ---------------------------------------------------------------------------
+# Search
+# ---------------------------------------------------------------------------
+
 def search_repositories(
     topic: str,
     queries: list[str],
@@ -339,14 +606,14 @@ def search_repositories(
             "per_page": per_page,
         })
         url = f"{API_ROOT}/search/repositories?{params}"
-        payload = github_request(url)
+        payload = cached_github_request(url)
         for item in payload.get("items", []):
             full_name = item.get("full_name")
             if full_name and full_name not in seen:
                 item["_matched_query"] = query
                 item["_relevance_score"] = relevance_score(item, topic, queries)
                 seen[full_name] = item
-        time.sleep(0.5)
+        time.sleep(0.3)
 
     filtered = [item for item in seen.values() if item.get("_relevance_score", 0) >= min_relevance]
     if len(filtered) < candidate_limit:
@@ -357,6 +624,10 @@ def search_repositories(
         )
     return sorted(filtered, key=lambda item: item.get("stargazers_count", 0), reverse=True)[:candidate_limit]
 
+
+# ---------------------------------------------------------------------------
+# Enrichment
+# ---------------------------------------------------------------------------
 
 def days_since(date_text: str | None) -> int | None:
     if not date_text:
@@ -466,7 +737,10 @@ def fetch_readme(full_name: str, max_chars: int) -> str | None:
     if max_chars <= 0:
         return None
     encoded = urllib.parse.quote(full_name, safe="/")
-    text = github_request(f"{API_ROOT}/repos/{encoded}/readme", accept="application/vnd.github.raw")
+    text = cached_github_request(
+        f"{API_ROOT}/repos/{encoded}/readme",
+        accept="application/vnd.github.raw",
+    )
     if not text:
         return None
     return text[:max_chars]
@@ -474,14 +748,14 @@ def fetch_readme(full_name: str, max_chars: int) -> str | None:
 
 def fetch_languages(full_name: str) -> dict[str, int]:
     encoded = urllib.parse.quote(full_name, safe="/")
-    payload = github_request(f"{API_ROOT}/repos/{encoded}/languages")
+    payload = cached_github_request(f"{API_ROOT}/repos/{encoded}/languages")
     return payload or {}
 
 
 def enrich(item: dict[str, Any], readme_chars: int) -> dict[str, Any]:
     full_name = item["full_name"]
     encoded = urllib.parse.quote(full_name, safe="/")
-    detail = github_request(f"{API_ROOT}/repos/{encoded}") or item
+    detail = cached_github_request(f"{API_ROOT}/repos/{encoded}") or item
     languages = fetch_languages(full_name)
     readme = fetch_readme(full_name, readme_chars)
     quality = quality_score(detail, readme)
@@ -514,12 +788,31 @@ def enrich(item: dict[str, Any], readme_chars: int) -> dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------------------
+# Markdown report
+# ---------------------------------------------------------------------------
+
 def markdown_table_row(values: list[Any]) -> str:
     escaped = []
     for value in values:
         text = "" if value is None else str(value)
         escaped.append(text.replace("|", "\\|").replace("\n", " "))
     return "| " + " | ".join(escaped) + " |"
+
+
+def sparkbar(values: list[int], width: int = 6) -> str:
+    """Render a simple text sparkline / mini bar chart."""
+    if not values:
+        return ""
+    mx = max(values)
+    if mx == 0:
+        return " " * width
+    chars = "▁▂▃▄▅▆▇█"
+    out = ""
+    for v in values:
+        idx = int((v / mx) * (len(chars) - 1))
+        out += chars[idx]
+    return out
 
 
 def write_markdown(path: Path, payload: dict[str, Any]) -> None:
@@ -535,15 +828,28 @@ def write_markdown(path: Path, payload: dict[str, Any]) -> None:
     lines.append(f"- Target final count: {payload['limit']}")
     lines.append(f"- Candidate count: {len(payload['repositories'])}")
     lines.append("")
+
+    # Stars distribution bar
+    star_values = [repo.get("stars") or 0 for repo in payload["repositories"]]
+    if star_values:
+        bar = sparkbar(star_values)
+        lines.append("### Stars Distribution")
+        lines.append("")
+        lines.append(f"`{bar}`  (bigger = more stars)")
+        lines.append("")
+
     lines.append("## Candidate Repositories (Pre-LLM)")
     lines.append("")
-    lines.append(markdown_table_row(["#", "Repository", "Stars", "Relevance", "Quality", "Language", "Activity", "Pushed", "License"]))
-    lines.append(markdown_table_row(["---", "---", "---:", "---:", "---:", "---", "---", "---", "---"]))
+    lines.append(markdown_table_row(["#", "Repository", "Stars", "★Bar", "Relevance", "Quality", "Language", "Activity", "Pushed", "License"]))
+    lines.append(markdown_table_row(["---", "---", "---:", "---", "---:", "---:", "---", "---", "---", "---"]))
     for index, repo in enumerate(payload["repositories"], 1):
+        star_val = repo["stars"] or 0
+        bar_char = sparkbar([star_val], width=1)
         lines.append(markdown_table_row([
             index,
             f"[{repo['full_name']}]({repo['html_url']})",
             repo["stars"],
+            bar_char,
             repo["relevance_score"],
             repo["quality_score"],
             repo["language"],
@@ -559,10 +865,13 @@ def write_markdown(path: Path, payload: dict[str, Any]) -> None:
         "Prefer true domain fit over raw stars, but preserve star order when relevance is comparable."
     )
     lines.append("")
-    lines.append(markdown_table_row(["Decision", "Final Rank", "Repository", "Reason"]))
-    lines.append(markdown_table_row(["---", "---:", "---", "---"]))
+    lines.append(markdown_table_row(["Decision", "Final Rank", "Repository", "Stars", "Rel", "Qual", "Reason"]))
+    lines.append(markdown_table_row(["---", "---:", "---", "---:", "---:", "---:", "---"]))
     for repo in payload["repositories"]:
-        lines.append(markdown_table_row(["review", "", repo["full_name"], ""]))
+        lines.append(markdown_table_row([
+            "review", "", repo["full_name"],
+            repo["stars"], repo["relevance_score"], repo["quality_score"], "",
+        ]))
     lines.append("")
     lines.append("## Evidence Notes")
     for repo in payload["repositories"]:
@@ -588,49 +897,187 @@ def write_markdown(path: Path, payload: dict[str, Any]) -> None:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Scan top-starred GitHub repositories for a topic.")
+    # First pass: extract --config before full parse
+    config_parser = make_config_argparser()
+    known, remaining = config_parser.parse_known_args(argv)
+    cfg: dict[str, Any] = {}
+    if known.config:
+        p = Path(known.config)
+        if p.exists():
+            try:
+                raw = p.read_text(encoding="utf-8")
+                cfg = json.loads(raw) if p.suffix == ".json" else _minimal_toml_parse(raw)
+            except Exception as exc:
+                print(f"warning: failed to load config {p}: {exc}", file=sys.stderr)
+    else:
+        cfg = load_config()
+
+    parser = argparse.ArgumentParser(
+        description="Scan top-starred GitHub repositories for a topic.",
+        parents=[make_config_argparser()],
+    )
     parser.add_argument("topic", help="User-facing topic/domain, e.g. 'AI novel writing'.")
     parser.add_argument("--query", action="append", help="GitHub repository search query variant. Can be repeated.")
     parser.add_argument("--no-auto-expand", action="store_true", help="Disable automatic query expansion for Chinese/broad topics.")
-    parser.add_argument("--max-query-variants", type=int, default=8, help="Maximum query variants after automatic expansion.")
-    parser.add_argument("--limit", type=int, default=10, help="Target number of repositories to keep after LLM rerank.")
-    parser.add_argument("--candidate-limit", type=int, help="Number of pre-LLM candidates to enrich. Defaults to max(limit * 3, limit).")
-    parser.add_argument("--min-stars", type=int, default=0, help="Minimum stars qualifier to append unless query already includes stars:.")
-    parser.add_argument("--readme-chars", type=int, default=6000, help="Maximum README characters to store per repository. Use 0 to skip.")
-    parser.add_argument("--search-fields", default="name,description", help="GitHub in: fields to append when a query has no in: qualifier. Use name,description by default; add readme only when results are sparse.")
-    parser.add_argument("--min-relevance", type=int, default=2, help="Minimum lightweight relevance score before a repository can be kept.")
+    parser.add_argument("--max-query-variants", type=int, default=config_get(cfg, "defaults", "max_query_variants", default=8),
+                        help="Maximum query variants after automatic expansion.")
+    parser.add_argument("--limit", type=int, default=config_get(cfg, "defaults", "limit", default=10),
+                        help="Target number of repositories to keep after LLM rerank.")
+    parser.add_argument("--candidate-limit", type=int,
+                        help="Number of pre-LLM candidates to enrich. Defaults to max(limit * 3, limit).")
+    parser.add_argument("--min-stars", type=int, default=config_get(cfg, "defaults", "min_stars", default=0),
+                        help="Minimum stars qualifier to append unless query already includes stars:.")
+    parser.add_argument("--readme-chars", type=int, default=config_get(cfg, "defaults", "readme_chars", default=6000),
+                        help="Maximum README characters to store per repository. Use 0 to skip.")
+    parser.add_argument("--search-fields", default=config_get(cfg, "defaults", "search_fields", default="name,description"),
+                        help="GitHub in: fields to append. Use name,description by default; add readme only when results are sparse.")
+    parser.add_argument("--min-relevance", type=int, default=config_get(cfg, "defaults", "min_relevance", default=2),
+                        help="Minimum lightweight relevance score before a repository can be kept.")
+    parser.add_argument("--max-workers", type=int, default=config_get(cfg, "defaults", "max_workers", default=5),
+                        help="Number of concurrent enrichment workers.")
+    parser.add_argument("--cache-ttl", type=float, default=config_get(cfg, "defaults", "cache_ttl_hours", default=1),
+                        help="Cache TTL in hours.")
+    parser.add_argument("--no-cache", action="store_true", help="Disable disk cache.")
+    parser.add_argument("--clear-cache", action="store_true", help="Clear cache and exit.")
+    parser.add_argument("--expansion-rules", help="Path to external expansion rules JSON file.")
     parser.add_argument("--out", help="Output JSON path. Defaults to ./github_scan_<topic>.json")
     parser.add_argument("--markdown-out", help="Output Markdown path. Defaults to JSON path with .md suffix.")
-    return parser.parse_args(argv)
+    args = parser.parse_args(remaining)
 
+    # Apply config defaults for None values
+    if args.candidate_limit is None:
+        args.candidate_limit = config_get(cfg, "defaults", "candidate_limit", default=max(args.limit * 3, args.limit))
+    if args.expansion_rules is None:
+        args.expansion_rules = config_get(cfg, "expansion_rules", "path")
+
+    # Override config from env
+    env_token = config_get(cfg, "github", "token")
+    if env_token and not get_token():
+        os.environ["GITHUB_TOKEN"] = str(env_token)
+
+    return args
+
+
+def _minimal_toml_parse(text: str) -> dict[str, Any]:
+    """Parse minimal TOML (sections + key = value)."""
+    config: dict[str, Any] = {}
+    section = config
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        m = re.match(r"^\[(.+)\]$", stripped)
+        if m:
+            section_name = m.group(1)
+            config[section_name] = {}
+            section = config[section_name]
+            continue
+        if "=" in stripped:
+            key, _, value = stripped.partition("=")
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            if value.lower() in ("true", "yes", "on"):
+                value = True
+            elif value.lower() in ("false", "no", "off"):
+                value = False
+            else:
+                try:
+                    value = int(value)
+                except ValueError:
+                    try:
+                        value = float(value)
+                    except ValueError:
+                        pass
+            section[key] = value
+    return config
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
+
+    # Cache management
+    if args.clear_cache:
+        count = clear_cache()
+        print(f"Cleared {count} cache entries.")
+        return 0
+
+    global _cache_dir
+    if args.no_cache:
+        _cache_dir = None  # type: ignore[assignment]
+
     source_queries = args.query or [args.topic]
-    queries = source_queries if args.no_auto_expand else auto_expand_queries(args.topic, source_queries, args.max_query_variants)
+    queries = (
+        source_queries
+        if args.no_auto_expand
+        else auto_expand_queries(args.topic, source_queries, args.max_query_variants, args.expansion_rules)
+    )
     candidate_limit = args.candidate_limit or max(args.limit * 3, args.limit)
     if candidate_limit < args.limit:
         raise RuntimeError("--candidate-limit must be greater than or equal to --limit")
+
     out_path = Path(args.out or f"github_scan_{slugify(args.topic)}.json").resolve()
     md_path = Path(args.markdown_out).resolve() if args.markdown_out else out_path.with_suffix(".md")
 
-    repos = search_repositories(args.topic, queries, candidate_limit, args.min_stars, args.search_fields, args.min_relevance)
+    # Search
+    repos = search_repositories(
+        args.topic, queries, candidate_limit,
+        args.min_stars, args.search_fields, args.min_relevance,
+    )
     if not repos:
         raise RuntimeError("No repositories found. Try broader or English query variants.")
 
-    enriched = []
-    for index, repo in enumerate(repos, 1):
-        print(f"[{index}/{len(repos)}] Fetching {repo['full_name']}...", file=sys.stderr)
-        enriched.append(enrich(repo, args.readme_chars))
-        time.sleep(0.5)
+    # Concurrent enrichment
+    enriched: list[dict[str, Any]] = []
+    max_workers = args.max_workers
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {
+            pool.submit(enrich, repo, args.readme_chars): repo
+            for repo in repos
+        }
+        if tqdm is not None:
+            iterator = tqdm(
+                as_completed(futures),
+                total=len(futures),
+                desc="Enriching repositories",
+                unit="repo",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"Enriching {len(futures)} repositories ({max_workers} workers)...",
+                file=sys.stderr,
+            )
+            iterator = as_completed(futures)
+
+        for future in iterator:
+            repo = futures[future]
+            try:
+                result = future.result()
+                enriched.append(result)
+            except Exception as exc:
+                print(
+                    f"error enriching {repo.get('full_name', 'unknown')}: {exc}",
+                    file=sys.stderr,
+                )
+
+    # Sort enriched list by stars desc (they may come back out of order)
+    enriched.sort(key=lambda r: r.get("stars") or 0, reverse=True)
 
     payload = {
         "topic": args.topic,
         "queries": queries,
         "source_queries": source_queries,
         "auto_expand": not args.no_auto_expand,
-        "focus_terms": focus_terms(args.topic, queries),
+        "focus_terms": focus_terms(args.topic, queries, args.expansion_rules),
         "search_fields": args.search_fields,
         "scanned_at": utc_now(),
         "limit": args.limit,
@@ -640,7 +1087,12 @@ def main(argv: list[str]) -> int:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     write_markdown(md_path, payload)
-    print(json.dumps({"json": str(out_path), "markdown": str(md_path), "candidates": len(enriched), "target_limit": args.limit}, ensure_ascii=False))
+    print(json.dumps({
+        "json": str(out_path),
+        "markdown": str(md_path),
+        "candidates": len(enriched),
+        "target_limit": args.limit,
+    }, ensure_ascii=False))
     return 0
 
 

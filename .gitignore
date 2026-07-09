@@ -5,3 +5,7 @@ work/
 dist/
 build/
 node_modules/
+.forge-skill-cache/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
