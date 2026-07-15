@@ -82,6 +82,15 @@ ForgeSkill 不只看 stars。它会给每个候选项目生成两个辅助信号
 
 这两个分数不会替代判断，而是帮助 Codex 做更可靠的二次筛选。
 
+### 风险标记与采纳建议
+
+ForgeSkill 会为每个候选项目生成 `risk_flags` 和 `recommendation`：
+
+- `risk_flags`：标记 archived、stale、no-license、thin-readme、high-issue-load 等风险。
+- `recommendation`：给出 strong-reference、usable-reference、study-with-caution、study-patterns-only、reference-only 或 review-carefully 等采纳建议。
+
+这样 Codex 在二次重排时不只知道“谁最火”，还知道“谁适合强参考、谁只能看思路、谁应该谨慎处理”。
+
 ### LLM 二次重排
 
 ForgeSkill 会生成 `LLM Rerank Worksheet`。Codex 会根据证据判断哪些仓库真正值得进入最终分析，而不是机械选择 star 最高的项目。
@@ -162,7 +171,7 @@ User idea
 
 一次完整的 ForgeSkill 工作流通常会产出三类结果：
 
-- **GitHub 研究报告**：包含候选项目、stars、维护状态、license、README 摘要、相关度和质量评分。
+- **GitHub 研究报告**：包含候选项目、stars、维护状态、license、README 摘要、相关度、质量评分、风险标记、采纳建议和扫描汇总。
 - **融合蓝图**：包含 Top 项目重排理由、逐项优缺点、跨项目模式、差异化定位、MVP 范围和实施计划。
 - **可落地文件**：按需生成新的 Codex skill 或项目骨架，包括 README、blueprint、基础目录、`SKILL.md`、`agents/openai.yaml`、`references/` 和 `scripts/`。
 
@@ -261,10 +270,13 @@ Markdown 报告里会包含：
 
 - 自动扩展后的 queries
 - focus terms
+- scan summary
 - candidate repositories
 - stars
 - relevance score
 - quality score
+- risk flags
+- recommendation
 - LLM rerank worksheet
 - 每个仓库的证据摘要
 
@@ -308,6 +320,8 @@ python .\forge-skill\scripts\github_scan.py "exact topic" --no-auto-expand
 
 报告中的 `relevance_score` 是领域相关度参考，`quality_score` 是维护和复用质量参考。最终判断仍由 Codex 根据证据完成。
 
+`risk_flags` 和 `recommendation` 用来辅助采纳决策：例如 `strong-reference` 适合重点借鉴架构，`study-patterns-only` 适合只提炼思路，`reference-only` 通常不适合作为主要实现参考。
+
 ## 常用命令
 
 ### 扫描 AI 小说创作项目
@@ -349,6 +363,18 @@ python .\forge-skill\scripts\github_scan.py "AI小说创作" --min-relevance 4
 ```
 
 阈值越高，候选越干净，但可能漏掉项目。
+
+### 过滤低质量或长期未维护项目
+
+```powershell
+python .\forge-skill\scripts\github_scan.py "AI小说创作" `
+  --exclude-archived `
+  --max-stale-days 730 `
+  --min-quality 55 `
+  --out work\ai-novel-clean-scan.json
+```
+
+这个命令会排除 archived 项目、两年以上未 push 的项目，并在 enrich 后过滤质量分低于 55 的项目。
 
 ## 自动落地成新 skill
 
@@ -518,6 +544,12 @@ python .\forge-skill\scripts\materialize.py --help
 
 ```powershell
 --query "novel writing assistant" --query "worldbuilding AI"
+```
+
+也可以排除明显不适合复用的候选：
+
+```powershell
+--exclude-archived --max-stale-days 730 --min-quality 55
 ```
 
 ### 结果太少

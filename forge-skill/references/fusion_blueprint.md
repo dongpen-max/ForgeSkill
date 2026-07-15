@@ -19,6 +19,7 @@ Provide a table with:
 - Final rank.
 - Repository and URL.
 - Stars.
+- Recommendation and risk flags from the scan.
 - Why it was selected.
 - Main reusable idea.
 - Main caveat.

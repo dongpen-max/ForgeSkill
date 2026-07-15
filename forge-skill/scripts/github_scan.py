@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import datetime as dt
 import http.client
 import json
@@ -462,6 +463,65 @@ def safe_license(repo: dict[str, Any]) -> str | None:
     return license_info.get("spdx_id") or license_info.get("name")
 
 
+def risk_flags(repo: dict[str, Any], readme: str | None, *, readme_requested: bool) -> list[str]:
+    flags: list[str] = []
+
+    if repo.get("archived"):
+        flags.append("archived")
+
+    days = days_since(repo.get("pushed_at"))
+    if days is None:
+        flags.append("unknown-activity")
+    elif days > 730:
+        flags.append("stale")
+    elif days > 365:
+        flags.append("aging")
+
+    license_name = safe_license(repo)
+    if not license_name:
+        flags.append("no-license")
+    elif license_name == "NOASSERTION":
+        flags.append("unclear-license")
+
+    if readme_requested:
+        readme_len = len(readme or "")
+        if readme_len == 0:
+            flags.append("no-readme")
+        elif readme_len < 800:
+            flags.append("thin-readme")
+
+    stars = repo.get("stargazers_count") or 0
+    open_issues = repo.get("open_issues_count") or 0
+    if stars >= 100:
+        issue_ratio = open_issues / stars
+        if issue_ratio > 0.15:
+            flags.append("high-issue-load")
+        elif issue_ratio > 0.07:
+            flags.append("moderate-issue-load")
+
+    if not repo.get("topics"):
+        flags.append("no-topics")
+    if not repo.get("language"):
+        flags.append("no-primary-language")
+
+    return flags
+
+
+def adoption_recommendation(quality: int, relevance: int, flags: list[str]) -> str:
+    flag_set = set(flags)
+    if "archived" in flag_set:
+        return "reference-only"
+    if "no-license" in flag_set or "unclear-license" in flag_set:
+        return "study-patterns-only"
+    if "stale" in flag_set:
+        return "study-with-caution"
+    if quality >= 75 and relevance >= 8:
+        return "strong-reference"
+    if quality >= 55 and relevance >= 4:
+        return "usable-reference"
+    return "review-carefully"
+
+
 def fetch_readme(full_name: str, max_chars: int) -> str | None:
     if max_chars <= 0:
         return None
@@ -485,6 +545,8 @@ def enrich(item: dict[str, Any], readme_chars: int) -> dict[str, Any]:
     languages = fetch_languages(full_name)
     readme = fetch_readme(full_name, readme_chars)
     quality = quality_score(detail, readme)
+    flags = risk_flags(detail, readme, readme_requested=readme_chars > 0)
+    relevance = item.get("_relevance_score") or 0
 
     return {
         "full_name": full_name,
@@ -507,9 +569,11 @@ def enrich(item: dict[str, Any], readme_chars: int) -> dict[str, Any]:
         "activity": activity_label(detail.get("pushed_at")),
         "default_branch": detail.get("default_branch"),
         "matched_query": item.get("_matched_query"),
-        "relevance_score": item.get("_relevance_score"),
+        "relevance_score": relevance,
         "quality_score": quality["score"],
         "quality_signals": quality["signals"],
+        "risk_flags": flags,
+        "recommendation": adoption_recommendation(quality["score"], relevance, flags),
         "readme_excerpt": readme,
     }
 
@@ -520,6 +584,47 @@ def markdown_table_row(values: list[Any]) -> str:
         text = "" if value is None else str(value)
         escaped.append(text.replace("|", "\\|").replace("\n", " "))
     return "| " + " | ".join(escaped) + " |"
+
+
+def format_counts(counts: dict[str, int]) -> str:
+    if not counts:
+        return "`none`"
+    return ", ".join(f"`{key}`: {value}" for key, value in counts.items())
+
+
+def summarize_repositories(repositories: list[dict[str, Any]]) -> dict[str, Any]:
+    activity = Counter(repo.get("activity") or "unknown" for repo in repositories)
+    languages = Counter(repo.get("language") or "Unknown" for repo in repositories)
+    licenses = Counter(repo.get("license") or "Unclear" for repo in repositories)
+    recommendations = Counter(repo.get("recommendation") or "review-carefully" for repo in repositories)
+    risk = Counter(flag for repo in repositories for flag in repo.get("risk_flags", []))
+    return {
+        "activity": dict(activity.most_common()),
+        "languages": dict(languages.most_common(10)),
+        "licenses": dict(licenses.most_common(10)),
+        "recommendations": dict(recommendations.most_common()),
+        "risk_flags": dict(risk.most_common()),
+    }
+
+
+def filter_candidates(
+    repositories: list[dict[str, Any]],
+    *,
+    exclude_archived: bool,
+    max_stale_days: int | None,
+) -> list[dict[str, Any]]:
+    filtered: list[dict[str, Any]] = []
+    for repo in repositories:
+        if exclude_archived and repo.get("archived"):
+            continue
+        if max_stale_days is not None:
+            days = days_since(repo.get("pushed_at"))
+            if days is not None and days > max_stale_days:
+                continue
+        filtered.append(repo)
+    if len(filtered) < len(repositories):
+        print(f"warning: filtered {len(repositories) - len(filtered)} candidates before enrichment", file=sys.stderr)
+    return filtered
 
 
 def write_markdown(path: Path, payload: dict[str, Any]) -> None:
@@ -535,10 +640,19 @@ def write_markdown(path: Path, payload: dict[str, Any]) -> None:
     lines.append(f"- Target final count: {payload['limit']}")
     lines.append(f"- Candidate count: {len(payload['repositories'])}")
     lines.append("")
+    summary = payload.get("summary") or {}
+    lines.append("## Scan Summary")
+    lines.append("")
+    lines.append(f"- Recommendations: {format_counts(summary.get('recommendations') or {})}")
+    lines.append(f"- Risk flags: {format_counts(summary.get('risk_flags') or {})}")
+    lines.append(f"- Activity: {format_counts(summary.get('activity') or {})}")
+    lines.append(f"- Languages: {format_counts(summary.get('languages') or {})}")
+    lines.append(f"- Licenses: {format_counts(summary.get('licenses') or {})}")
+    lines.append("")
     lines.append("## Candidate Repositories (Pre-LLM)")
     lines.append("")
-    lines.append(markdown_table_row(["#", "Repository", "Stars", "Relevance", "Quality", "Language", "Activity", "Pushed", "License"]))
-    lines.append(markdown_table_row(["---", "---", "---:", "---:", "---:", "---", "---", "---", "---"]))
+    lines.append(markdown_table_row(["#", "Repository", "Stars", "Relevance", "Quality", "Recommendation", "Risks", "Language", "Activity", "Pushed", "License"]))
+    lines.append(markdown_table_row(["---", "---", "---:", "---:", "---:", "---", "---", "---", "---", "---", "---"]))
     for index, repo in enumerate(payload["repositories"], 1):
         lines.append(markdown_table_row([
             index,
@@ -546,6 +660,8 @@ def write_markdown(path: Path, payload: dict[str, Any]) -> None:
             repo["stars"],
             repo["relevance_score"],
             repo["quality_score"],
+            repo.get("recommendation"),
+            ", ".join(repo.get("risk_flags") or []) or "none",
             repo["language"],
             repo["activity"],
             repo["pushed_at"],
@@ -556,13 +672,21 @@ def write_markdown(path: Path, payload: dict[str, Any]) -> None:
     lines.append("")
     lines.append(
         f"Select up to {payload['limit']} repositories that best match the user's domain. "
-        "Prefer true domain fit over raw stars, but preserve star order when relevance is comparable."
+        "Prefer true domain fit over raw stars, use recommendations as adoption guidance, "
+        "and treat risk flags as prompts for closer review."
     )
     lines.append("")
-    lines.append(markdown_table_row(["Decision", "Final Rank", "Repository", "Reason"]))
-    lines.append(markdown_table_row(["---", "---:", "---", "---"]))
+    lines.append(markdown_table_row(["Decision", "Final Rank", "Repository", "Recommendation", "Risks", "Reason"]))
+    lines.append(markdown_table_row(["---", "---:", "---", "---", "---", "---"]))
     for repo in payload["repositories"]:
-        lines.append(markdown_table_row(["review", "", repo["full_name"], ""]))
+        lines.append(markdown_table_row([
+            "review",
+            "",
+            repo["full_name"],
+            repo.get("recommendation"),
+            ", ".join(repo.get("risk_flags") or []) or "none",
+            "",
+        ]))
     lines.append("")
     lines.append("## Evidence Notes")
     for repo in payload["repositories"]:
@@ -574,6 +698,7 @@ def write_markdown(path: Path, payload: dict[str, Any]) -> None:
         lines.append(f"- Topics: {', '.join(repo.get('topics') or []) or 'None listed'}")
         lines.append(f"- Relevance score: {repo.get('relevance_score')}")
         lines.append(f"- Quality score/signals: {repo.get('quality_score')} / {', '.join(repo.get('quality_signals') or []) or 'None'}")
+        lines.append(f"- Recommendation/risk flags: {repo.get('recommendation')} / {', '.join(repo.get('risk_flags') or []) or 'None'}")
         lines.append(f"- Stars/forks/issues: {repo.get('stars')} / {repo.get('forks')} / {repo.get('open_issues')}")
         lines.append(f"- Activity/license: {repo.get('activity')} / {repo.get('license') or 'Unclear'}")
         readme = (repo.get("readme_excerpt") or "").strip()
@@ -600,6 +725,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--readme-chars", type=int, default=6000, help="Maximum README characters to store per repository. Use 0 to skip.")
     parser.add_argument("--search-fields", default="name,description", help="GitHub in: fields to append when a query has no in: qualifier. Use name,description by default; add readme only when results are sparse.")
     parser.add_argument("--min-relevance", type=int, default=2, help="Minimum lightweight relevance score before a repository can be kept.")
+    parser.add_argument("--exclude-archived", action="store_true", help="Drop archived repositories before enrichment.")
+    parser.add_argument("--max-stale-days", type=int, help="Drop repositories not pushed within this many days before enrichment.")
+    parser.add_argument("--min-quality", type=int, default=0, help="Minimum quality score after enrichment. Defaults to 0.")
     parser.add_argument("--out", help="Output JSON path. Defaults to ./github_scan_<topic>.json")
     parser.add_argument("--markdown-out", help="Output Markdown path. Defaults to JSON path with .md suffix.")
     return parser.parse_args(argv)
@@ -616,6 +744,7 @@ def main(argv: list[str]) -> int:
     md_path = Path(args.markdown_out).resolve() if args.markdown_out else out_path.with_suffix(".md")
 
     repos = search_repositories(args.topic, queries, candidate_limit, args.min_stars, args.search_fields, args.min_relevance)
+    repos = filter_candidates(repos, exclude_archived=args.exclude_archived, max_stale_days=args.max_stale_days)
     if not repos:
         raise RuntimeError("No repositories found. Try broader or English query variants.")
 
@@ -624,6 +753,14 @@ def main(argv: list[str]) -> int:
         print(f"[{index}/{len(repos)}] Fetching {repo['full_name']}...", file=sys.stderr)
         enriched.append(enrich(repo, args.readme_chars))
         time.sleep(0.5)
+
+    if args.min_quality > 0:
+        before = len(enriched)
+        enriched = [repo for repo in enriched if repo.get("quality_score", 0) >= args.min_quality]
+        if len(enriched) < before:
+            print(f"warning: filtered {before - len(enriched)} enriched repositories below quality {args.min_quality}", file=sys.stderr)
+        if not enriched:
+            raise RuntimeError("No repositories survived --min-quality. Lower the threshold or inspect the unfiltered scan.")
 
     payload = {
         "topic": args.topic,
@@ -635,6 +772,12 @@ def main(argv: list[str]) -> int:
         "scanned_at": utc_now(),
         "limit": args.limit,
         "candidate_limit": candidate_limit,
+        "filters": {
+            "exclude_archived": args.exclude_archived,
+            "max_stale_days": args.max_stale_days,
+            "min_quality": args.min_quality,
+        },
+        "summary": summarize_repositories(enriched),
         "repositories": enriched,
     }
     out_path.parent.mkdir(parents=True, exist_ok=True)

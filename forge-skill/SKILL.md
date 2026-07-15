@@ -24,8 +24,10 @@ Use this skill to turn a broad software idea into evidence-grounded output by su
    - Leave automatic query expansion enabled by default. It adds English GitHub search variants for non-English or broad topics, especially domains such as novel writing, story generation, agents, dashboards, and workflows.
    - The script collects a candidate pool for LLM reranking. Use `--limit` for the desired final count and `--candidate-limit` for the pre-LLM review pool.
    - The script applies a lightweight relevance score and a quality score. Use relevance to filter domain fit; use quality as a maintenance/reuse signal, not as an automatic winner.
+   - The script also emits `risk_flags`, `recommendation`, and a scan `summary`. Treat these as review aids: strong references can inspire architecture, study-patterns-only repos should inform ideas without reuse, and reference-only repos should usually be excluded from implementation patterns.
    - For broad topics, still pass 2-5 explicit `--query` variants when you know strong synonyms or product terms. Use `--no-auto-expand` only for exact GitHub searches.
    - If results are sparse, rerun with `--search-fields name,description,readme`.
+   - If results are noisy, rerun with `--exclude-archived`, `--max-stale-days <days>`, `--min-quality <score>`, or a higher `--min-relevance`.
    - Example:
 
 ```bash
@@ -37,6 +39,7 @@ python <skill-dir>/scripts/github_scan.py "AI novel writing" --limit 10 --candid
    - Use the "LLM Rerank Worksheet" section as the review checklist.
    - Select up to `--limit` repositories that best match the user's domain. Prefer true domain fit over raw stars, but preserve star order when relevance and quality are comparable.
    - Use quality score to spot healthier projects, but do not let it override a clearly better domain match.
+   - Use `recommendation` and `risk_flags` to explain adoption posture: strong-reference, usable-reference, study-with-caution, study-patterns-only, reference-only, or review-carefully.
    - Reject famous adjacent projects, awesome lists, personal profiles, political/news/content dumps, tutorials, or generic frameworks unless they are directly useful to the requested domain.
    - If results are thin or off-topic, rerun with better search variants, GitHub qualifiers, or targeted web search.
    - Prefer repository metadata, READMEs, docs, examples, issues, releases, and demos. Clone repositories only when implementation details are necessary.
@@ -71,7 +74,7 @@ Use `references/fusion_blueprint.md` as the default output structure unless the 
 
 ## Resource Guide
 
-- `scripts/github_scan.py`: Searches GitHub repositories by star count, auto-expands query variants for broad/non-English topics, deduplicates results, filters by lightweight relevance, adds quality scoring, enriches a pre-LLM candidate pool, fetches README excerpts, and writes JSON plus Markdown evidence reports.
+- `scripts/github_scan.py`: Searches GitHub repositories by star count, auto-expands query variants for broad/non-English topics, deduplicates results, filters by lightweight relevance, adds quality scoring, risk flags, adoption recommendations, and scan summaries, enriches a pre-LLM candidate pool, fetches README excerpts, and writes JSON plus Markdown evidence reports.
 - `scripts/materialize.py`: Creates a Codex skill or project scaffold from a structured JSON spec generated from the fusion blueprint.
 - `references/synthesis_rubric.md`: Evaluation dimensions and synthesis rules for turning repository research into a differentiated project or skill.
 - `references/fusion_blueprint.md`: Fixed final-output blueprint for reranked research, pros/cons, cross-project synthesis, and fused project or skill design.

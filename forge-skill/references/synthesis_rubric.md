@@ -12,6 +12,7 @@ For each relevant repository, extract:
 - Weaknesses: missing features, narrow scope, stale maintenance, difficult setup, UX gaps, architectural limitations, unclear license, safety gaps, or weak docs.
 - Reusable patterns: abstractions, workflows, architecture, prompt patterns, data models, plugin systems, evaluation loops, or onboarding ideas worth adapting.
 - Non-reusable parts: project-specific assumptions, licensing-restricted code/assets, overfit implementation choices, and features outside the user's goal.
+- Adoption posture: whether the scan marks it as `strong-reference`, `usable-reference`, `study-with-caution`, `study-patterns-only`, `reference-only`, or `review-carefully`, and why.
 
 ## Comparison Dimensions
 
@@ -24,13 +25,14 @@ Use these dimensions selectively:
 - Ecosystem: integrations, API shape, plugin support, file formats, and interoperability.
 - Maintenance: stars, forks, recent activity, issue volume, release cadence, archived status, and bus-factor hints.
 - License and reuse: license clarity, compatibility, and whether ideas can be adapted without copying protected material.
-- Scan scores: use relevance as the domain-fit signal and quality as a maintenance/reuse signal. Treat both as aids for review, not as final truth.
+- Scan scores and flags: use relevance as the domain-fit signal, quality as a maintenance/reuse signal, risk flags as prompts for closer review, and recommendation as an adoption posture. Treat them as aids for review, not as final truth.
 
 ## Synthesis Rules
 
 - Favor patterns that appear in multiple strong projects or clearly solve the user's stated pain.
 - Do not rank by stars alone; stars are a discovery signal, not proof of product quality.
 - Do not rank by quality score alone; a healthy but adjacent project may be less useful than a narrower domain-specific project.
+- Do not blindly reject every risky project; an archived or no-license repo may still reveal useful product ideas, but it should not be copied or used as the main implementation reference.
 - Convert weaknesses into design requirements for the new project.
 - Combine complementary strengths, not every feature. A strong synthesis should have a smaller coherent surface area than the union of all repos.
 - Identify the "missing middle": what users still cannot do easily across the top projects.
